@@ -14,7 +14,12 @@ from uagents_core.contrib.protocols.chat import (
     chat_protocol_spec,
 )
 
-from extractlabor import extract_human_tasks_from_prompt
+try:
+    # Works when running from repo root (e.g. `python -m agent.main`)
+    from agent.extractlabor import extract_human_tasks_from_prompt
+except Exception:
+    # Works when Railway service root is `agent/` (e.g. `python main.py`)
+    from extractlabor import extract_human_tasks_from_prompt
 
 
 AGENT_NAME = os.getenv("AGENT_NAME", "lahacks_fetch_agent")

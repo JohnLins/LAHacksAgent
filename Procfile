@@ -1,2 +1,2 @@
-web: python -m agent.main
+web: python main.py
 
