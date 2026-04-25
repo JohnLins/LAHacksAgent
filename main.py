@@ -16,33 +16,29 @@ from uagents_core.contrib.protocols.chat import (
     chat_protocol_spec,
 )
 
-try:
-    # Works when running from repo root (e.g. `python -m agent.main`)
-    from agent.extractlabor import extract_human_tasks_from_prompt
-except Exception:
-    # Works when Railway service root is `agent/` (e.g. `python main.py`)
-    from extractlabor import extract_human_tasks_from_prompt
+from extractlabor import extract_human_tasks_from_prompt
 
 
 AGENT_NAME = os.getenv("AGENT_NAME", "HumanAgent")
 AGENT_SEED = os.getenv("AGENT_SEED", "lahacks-fetch-agent-dev-seed-change-me")
-AGENT_PORT = int(os.getenv("AGENT_PORT", os.getenv("PORT", "8001")))
-AGENT_ENDPOINT = os.getenv("AGENT_ENDPOINT")
+AGENT_PORT = int(os.getenv("AGENT_PORT", "8001"))
 
 # Defaults to your deployed marketplace backend.
-# You can override with MARKETPLACE_URL in Railway variables.
+# You can override with MARKETPLACE_URL in your environment.
 MARKETPLACE_URL = os.getenv(
     "MARKETPLACE_URL",
     "https://lahacksbackend-production.up.railway.app/api/tasks/",
 )
 
 
+
+
 agent = Agent(
     name=AGENT_NAME,
     seed=AGENT_SEED,
     port=AGENT_PORT,
-    endpoint=AGENT_ENDPOINT,
-    network=os.getenv("AGENT_NETWORK", "testnet"),
+    mailbox=True,
+    publish_agent_details=True,
 )
 fund_agent_if_low(agent.wallet.address())
 
@@ -50,66 +46,15 @@ chat_proto = Protocol(spec=chat_protocol_spec)
 
 @agent.on_event("startup")
 async def _startup(ctx: Context):
-    """
-    Optional: auto-register this uAgent with Agentverse ACP from Railway.
-
-    If you set an Agentverse API key, the agent will attempt registration on boot,
-    so you don't need to run any local "registration script".
-    """
-    # Log what the running container actually sees at boot.
-    # This is the fastest way to diagnose Railway variable / service mixups.
+    # High-signal startup info for local mailbox runs.
     ctx.logger.info(
         "Startup config: "
         f"AGENT_NAME={AGENT_NAME} "
-        f"PORT={os.getenv('PORT')} "
-        f"AGENT_PORT={os.getenv('AGENT_PORT')} "
-        f"AGENT_ENDPOINT={AGENT_ENDPOINT} "
+        f"AGENT_PORT={AGENT_PORT} "
+        f"AGENT_ADDRESS={agent.address} "
         f"MARKETPLACE_URL={MARKETPLACE_URL} "
-        f"AGENTVERSE_API_KEY_set={bool(os.getenv('AGENTVERSE_API_KEY') or os.getenv('ILABS_AGENTVERSE_API_KEY') or os.getenv('AGENTVERSE_KEY'))} "
-        f"CORALFLAVOR_API_KEY_set={bool(os.getenv('CORALFLAVOR_API_KEY') or os.getenv('CORAL_API_KEY'))}"
+        f"ASI1_API_KEY_set={bool(os.getenv('ASI1_API_KEY'))}"
     )
-
-    api_key = (
-        os.getenv("AGENTVERSE_API_KEY")
-        or os.getenv("ILABS_AGENTVERSE_API_KEY")
-        or os.getenv("AGENTVERSE_KEY")
-    )
-    if not api_key:
-        ctx.logger.info("Agentverse API key not set; skipping ACP registration.")
-        return
-
-    # Agentverse needs a public, reachable endpoint for ACP verification.
-    if not AGENT_ENDPOINT:
-        ctx.logger.warning("AGENT_ENDPOINT not set; skipping ACP registration.")
-        return
-
-    # Normalise to include trailing slash (Agentverse UI often provides it).
-    endpoint = AGENT_ENDPOINT if AGENT_ENDPOINT.endswith("/") else AGENT_ENDPOINT + "/"
-
-    try:
-        from uagents_core.utils.registration import (  # type: ignore
-            RegistrationRequestCredentials,
-            register_chat_agent,
-        )
-    except Exception as exc:
-        ctx.logger.warning(
-            f"ACP registration import failed; skipping registration: {exc}"
-        )
-        return
-
-    try:
-        result = register_chat_agent(
-            AGENT_NAME,
-            endpoint,
-            active=True,
-            credentials=RegistrationRequestCredentials(
-                agentverse_api_key=api_key,
-                agent_seed_phrase=AGENT_SEED,
-            ),
-        )
-        ctx.logger.info(f"ACP registration result: {result}")
-    except Exception as exc:
-        ctx.logger.warning(f"ACP registration failed: {exc}")
 
 
 class HealthResponse(Model):
@@ -144,7 +89,6 @@ def _safe_env_summary() -> dict[str, str]:
     return {
         "agent_name": AGENT_NAME,
         "agent_port": str(AGENT_PORT),
-        "agent_endpoint_set": str(bool(AGENT_ENDPOINT)),
         "marketplace_url": MARKETPLACE_URL,
         "agentverse_api_key_set": str(
             bool(
@@ -199,11 +143,12 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         try:
             t_extract0 = time.time()
             tasks = extract_human_tasks_from_prompt(prompt)
+            print(tasks)
             ctx.logger.info(
                 f"[{req_id}] extractlabor ok tasks={len(tasks)} elapsed_ms={int((time.time()-t_extract0)*1000)}"
             )
             if not tasks:
-                reply = "No human tasks found in the prompt."
+                reply = "No human tasks found in the prompt."+prompt
             else:
                 posted = 0
                 failures: list[str] = []
