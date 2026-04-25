@@ -1,4 +1,6 @@
 import os
+import time
+import traceback
 from datetime import datetime
 from uuid import uuid4
 
@@ -46,6 +48,47 @@ fund_agent_if_low(agent.wallet.address())
 
 chat_proto = Protocol(spec=chat_protocol_spec)
 
+@agent.on_event("startup")
+async def _startup(ctx: Context):
+    """
+    Optional: auto-register this uAgent with Agentverse ACP from Railway.
+
+    If you set an Agentverse API key, the agent will attempt registration on boot,
+    so you don't need to run any local "registration script".
+    """
+    api_key = (
+        os.getenv("AGENTVERSE_API_KEY")
+        or os.getenv("ILABS_AGENTVERSE_API_KEY")
+        or os.getenv("AGENTVERSE_KEY")
+    )
+    if not api_key:
+        ctx.logger.info("Agentverse API key not set; skipping ACP registration.")
+        return
+
+    # Agentverse needs a public, reachable endpoint for ACP verification.
+    if not AGENT_ENDPOINT:
+        ctx.logger.warning("AGENT_ENDPOINT not set; skipping ACP registration.")
+        return
+
+    try:
+        from uagents_core.utils.registration import register_chat_agent  # type: ignore
+    except Exception as exc:
+        ctx.logger.warning(
+            f"ACP registration import failed; skipping registration: {exc}"
+        )
+        return
+
+    try:
+        result = register_chat_agent(
+            name=AGENT_NAME,
+            api_key=api_key,
+            seed=AGENT_SEED,
+            endpoint=AGENT_ENDPOINT,
+        )
+        ctx.logger.info(f"ACP registration result: {result}")
+    except Exception as exc:
+        ctx.logger.warning(f"ACP registration failed: {exc}")
+
 
 class HealthResponse(Model):
     status: str
@@ -65,10 +108,43 @@ def _create_text_chat(text: str) -> ChatMessage:
         content=[TextContent(type="text", text=text)],
     )
 
+def _safe_preview(text: str | None, limit: int = 500) -> str:
+    if not text:
+        return ""
+    t = str(text).replace("\n", "\\n")
+    if len(t) <= limit:
+        return t
+    return t[:limit] + f"...(+{len(t) - limit} chars)"
+
+
+def _safe_env_summary() -> dict[str, str]:
+    # Don't log secrets; only log presence/shape.
+    return {
+        "agent_name": AGENT_NAME,
+        "agent_port": str(AGENT_PORT),
+        "agent_endpoint_set": str(bool(AGENT_ENDPOINT)),
+        "marketplace_url": MARKETPLACE_URL,
+        "agentverse_api_key_set": str(
+            bool(
+                os.getenv("AGENTVERSE_API_KEY")
+                or os.getenv("ILABS_AGENTVERSE_API_KEY")
+                or os.getenv("AGENTVERSE_KEY")
+            )
+        ),
+        "coralflavor_api_key_set": str(
+            bool(os.getenv("CORALFLAVOR_API_KEY") or os.getenv("CORAL_API_KEY"))
+        ),
+    }
+
 
 @chat_proto.on_message(ChatMessage)
 async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
-    ctx.logger.info(f"Received message from {sender}")
+    req_id = uuid4().hex[:12]
+    t0 = time.time()
+    ctx.logger.info(
+        f"[{req_id}] chat_message received sender={sender} msg_id={msg.msg_id}"
+    )
+    ctx.logger.info(f"[{req_id}] env={_safe_env_summary()}")
     await ctx.send(
         sender,
         ChatAcknowledgement(
@@ -77,57 +153,87 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         ),
     )
 
-    for item in msg.content:
+    ctx.logger.info(f"[{req_id}] content_items={len(msg.content)}")
+    for idx, item in enumerate(msg.content):
         if isinstance(item, StartSessionContent):
-            ctx.logger.info(f"Session started with {sender}")
+            ctx.logger.info(f"[{req_id}] item[{idx}] StartSessionContent")
             continue
 
         if isinstance(item, EndSessionContent):
-            ctx.logger.info(f"Session ended with {sender}")
+            ctx.logger.info(f"[{req_id}] item[{idx}] EndSessionContent")
             continue
 
         if not isinstance(item, TextContent):
-            ctx.logger.info(f"Received unexpected content type from {sender}")
+            ctx.logger.info(
+                f"[{req_id}] item[{idx}] unexpected_content_type={type(item)}"
+            )
             continue
 
         prompt = item.text
-        ctx.logger.info(f"Extracting human tasks from prompt: {prompt}")
+        ctx.logger.info(
+            f"[{req_id}] item[{idx}] text_len={len(prompt or '')} preview={_safe_preview(prompt, 300)}"
+        )
 
         try:
+            t_extract0 = time.time()
             tasks = extract_human_tasks_from_prompt(prompt)
+            ctx.logger.info(
+                f"[{req_id}] extractlabor ok tasks={len(tasks)} elapsed_ms={int((time.time()-t_extract0)*1000)}"
+            )
             if not tasks:
                 reply = "No human tasks found in the prompt."
             else:
                 posted = 0
                 failures: list[str] = []
-                for task in tasks:
+                for ti, task in enumerate(tasks):
                     description = task.get("task")
                     compensation = float(task.get("compensation", 0))
-                    response = requests.post(
-                        MARKETPLACE_URL,
-                        json={
-                            "description": description,
-                            "compensation": compensation,
-                        },
-                        timeout=15,
+                    ctx.logger.info(
+                        f"[{req_id}] post[{ti}] -> marketplace desc_preview={_safe_preview(str(description), 120)} comp={compensation}"
+                    )
+                    t_post0 = time.time()
+                    try:
+                        response = requests.post(
+                            MARKETPLACE_URL,
+                            json={
+                                "description": description,
+                                "compensation": compensation,
+                            },
+                            timeout=15,
+                        )
+                    except Exception as post_exc:
+                        failures.append(str(description))
+                        ctx.logger.error(
+                            f"[{req_id}] post[{ti}] exception={post_exc}\n{traceback.format_exc()}"
+                        )
+                        continue
+                    ctx.logger.info(
+                        f"[{req_id}] post[{ti}] status={response.status_code} elapsed_ms={int((time.time()-t_post0)*1000)}"
                     )
                     if response.ok:
                         posted += 1
-                        ctx.logger.info(
-                            f"Posted task: {description} (${compensation})"
-                        )
+                        ctx.logger.info(f"[{req_id}] post[{ti}] ok")
                     else:
                         failures.append(str(description))
                         ctx.logger.error(
-                            f"Failed to post task: {description} ({response.text})"
+                            f"[{req_id}] post[{ti}] failed body_preview={_safe_preview(response.text, 500)}"
                         )
 
                 reply = f"Posted {posted} of {len(tasks)} extracted human tasks."
                 if failures:
                     reply += f" Failed: {', '.join(failures)}"
         except Exception as exc:
-            reply = f"Error extracting or posting tasks: {exc}"
+            ctx.logger.error(
+                f"[{req_id}] handler exception={exc}\n{traceback.format_exc()}"
+            )
+            reply = (
+                "Internal error while extracting or posting tasks. "
+                f"(ref: {req_id})"
+            )
 
+        ctx.logger.info(
+            f"[{req_id}] sending_reply len={len(reply)} elapsed_ms={int((time.time()-t0)*1000)}"
+        )
         await ctx.send(sender, _create_text_chat(reply))
 
 
