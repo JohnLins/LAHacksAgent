@@ -83,8 +83,14 @@ async def _startup(ctx: Context):
         ctx.logger.warning("AGENT_ENDPOINT not set; skipping ACP registration.")
         return
 
+    # Normalise to include trailing slash (Agentverse UI often provides it).
+    endpoint = AGENT_ENDPOINT if AGENT_ENDPOINT.endswith("/") else AGENT_ENDPOINT + "/"
+
     try:
-        from uagents_core.utils.registration import register_chat_agent  # type: ignore
+        from uagents_core.utils.registration import (  # type: ignore
+            RegistrationRequestCredentials,
+            register_chat_agent,
+        )
     except Exception as exc:
         ctx.logger.warning(
             f"ACP registration import failed; skipping registration: {exc}"
@@ -93,10 +99,13 @@ async def _startup(ctx: Context):
 
     try:
         result = register_chat_agent(
-            name=AGENT_NAME,
-            api_key=api_key,
-            seed=AGENT_SEED,
-            endpoint=AGENT_ENDPOINT,
+            AGENT_NAME,
+            endpoint,
+            active=True,
+            credentials=RegistrationRequestCredentials(
+                agentverse_api_key=api_key,
+                agent_seed_phrase=AGENT_SEED,
+            ),
         )
         ctx.logger.info(f"ACP registration result: {result}")
     except Exception as exc:
