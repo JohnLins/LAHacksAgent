@@ -1,0 +1,2 @@
+"""LAHacks Agentverse agent package."""
+
