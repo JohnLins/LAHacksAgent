@@ -56,6 +56,19 @@ async def _startup(ctx: Context):
     If you set an Agentverse API key, the agent will attempt registration on boot,
     so you don't need to run any local "registration script".
     """
+    # Log what the running container actually sees at boot.
+    # This is the fastest way to diagnose Railway variable / service mixups.
+    ctx.logger.info(
+        "Startup config: "
+        f"AGENT_NAME={AGENT_NAME} "
+        f"PORT={os.getenv('PORT')} "
+        f"AGENT_PORT={os.getenv('AGENT_PORT')} "
+        f"AGENT_ENDPOINT={AGENT_ENDPOINT} "
+        f"MARKETPLACE_URL={MARKETPLACE_URL} "
+        f"AGENTVERSE_API_KEY_set={bool(os.getenv('AGENTVERSE_API_KEY') or os.getenv('ILABS_AGENTVERSE_API_KEY') or os.getenv('AGENTVERSE_KEY'))} "
+        f"CORALFLAVOR_API_KEY_set={bool(os.getenv('CORALFLAVOR_API_KEY') or os.getenv('CORAL_API_KEY'))}"
+    )
+
     api_key = (
         os.getenv("AGENTVERSE_API_KEY")
         or os.getenv("ILABS_AGENTVERSE_API_KEY")
