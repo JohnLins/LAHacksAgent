@@ -22,9 +22,9 @@ except Exception:
     from extractlabor import extract_human_tasks_from_prompt
 
 
-AGENT_NAME = os.getenv("AGENT_NAME", "lahacks_fetch_agent")
+AGENT_NAME = os.getenv("AGENT_NAME", "HumanAgent")
 AGENT_SEED = os.getenv("AGENT_SEED", "lahacks-fetch-agent-dev-seed-change-me")
-AGENT_PORT = int(os.getenv("AGENT_PORT", os.getenv("PORT", "8000")))
+AGENT_PORT = int(os.getenv("AGENT_PORT", os.getenv("PORT", "8001")))
 AGENT_ENDPOINT = os.getenv("AGENT_ENDPOINT")
 
 # Defaults to your deployed marketplace backend.
